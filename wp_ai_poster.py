@@ -22,6 +22,8 @@ import copy
 
 # Import custom modules
 from blog_topic import get_random_topic
+from blog_style import analyze_and_enhance
+import wp_add_meta  # Import the new metadata module
 
 # Version information
 VERSION = "2.0.0"  # Major update with outline-based generation
@@ -40,6 +42,8 @@ WP_PASSWORD = os.getenv("WP_PASSWORD")
 
 # Default blog post settings
 DEFAULT_CATEGORY_ID = os.getenv("DEFAULT_CATEGORY_ID")
+if DEFAULT_CATEGORY_ID and DEFAULT_CATEGORY_ID.strip().isdigit():
+    DEFAULT_CATEGORY_ID = int(DEFAULT_CATEGORY_ID)
 DEFAULT_CATEGORY_NAME = os.getenv("DEFAULT_CATEGORY_NAME", "Uncategorized").split('#')[0].strip()
 DEFAULT_TAGS = os.getenv("DEFAULT_TAGS", "ai,generated,content").split('#')[0].strip().split(",")
 DEFAULT_STATUS = os.getenv("DEFAULT_STATUS", "draft").split('#')[0].strip()
@@ -71,7 +75,7 @@ def setup_argparse():
                         help="Skip posting to WordPress, just generate content")
     parser.add_argument("--category-name", default=None, 
                         help=f"WordPress category name (default: {DEFAULT_CATEGORY_NAME})")
-    parser.add_argument("--category-id", type=int, default=None,
+    parser.add_argument("--category-id", type=int, default=DEFAULT_CATEGORY_ID,
                         help="WordPress category ID (bypasses category name lookup)")
     parser.add_argument("--tags", default=None, 
                         help=f"Comma-separated list of tags (default: {','.join(DEFAULT_TAGS)})")
@@ -310,6 +314,12 @@ def generate_section_prompt(title, section_title, section_description, outline, 
     """Create a prompt to generate a specific section of the blog post."""
     # Estimate appropriate section length based on total word count and number of sections
     # Allow roughly 15% for intro and 15% for conclusion, the rest divided among main sections
+
+    # Handle case when total_words is None by using a default value
+    if total_words is None:
+        # Use a reasonable default word count (can adjust as needed)
+        total_words = random.randint(2000, 2500)
+        print(f"Warning: No word count provided. Using default of {total_words} words.")
 
     approx_section_words = int((total_words) / max(1, num_sections))
     
@@ -648,6 +658,10 @@ def generate_content(client, prompt, temperature=0.7, is_outline=False):
 
 def extract_title(content):
     """Extract the title from the generated content."""
+    # Handle if content is a tuple (content, title)
+    if isinstance(content, tuple) and len(content) == 2:
+        return content[1]  # Return the title part of the tuple
+    
     # Look for the first heading or the first line
     import re
     
@@ -875,7 +889,7 @@ def create_category(headers, category_name):
         print(f"Error creating category: {e}")
         return None
 
-def post_to_wordpress(title, content, category_name=None, category_id=None, tags=None, status="draft", meta_content=None, auth_method=None, use_application_password=False):
+def post_to_wordpress(title, content, category_name=None, category_id=None, tags=None, status="draft", meta_content=None, auth_method=None, use_application_password=False, debug=False):
     """Post the generated content to WordPress using the REST API.
     
     Category handling priority:
@@ -995,25 +1009,8 @@ def post_to_wordpress(title, content, category_name=None, category_id=None, tags
     
     # Add meta description and keyphrases if available
     if meta_content:
-        meta_description = meta_content.get('meta_description', '')
-        if meta_description:
-            post_data['meta'] = {
-                '_yoast_wpseo_metadesc': meta_description,  # For Yoast SEO
-                '_aioseop_description': meta_description     # For All in One SEO
-            }
-        
-        # Add focus keyphrases for SEO plugins
-        keyphrases = meta_content.get('keyphrases', [])
-        if keyphrases:
-            primary_keyphrase = keyphrases[0] if keyphrases else ''
-            if 'meta' not in post_data:
-                post_data['meta'] = {}
-            post_data['meta']['_yoast_wpseo_focuskw'] = primary_keyphrase
-            
-            # Add additional keyphrases if available
-            if len(keyphrases) > 1:
-                secondary_keyphrases = ', '.join(keyphrases[1:])
-                post_data['meta']['_yoast_wpseo_keywordsynonyms'] = secondary_keyphrases
+        # Use the wp_add_meta module to add metadata
+        post_data = wp_add_meta.add_meta_to_post_data(post_data, title, content, meta_content)
     
     # Send the request
     try:
@@ -1021,285 +1018,214 @@ def post_to_wordpress(title, content, category_name=None, category_id=None, tags
         print(f"Posting to WordPress: {posts_url}")
         print(f"Post data keys: {list(post_data.keys())}")
         
+        # Debug information for SEO metadata
+        if 'meta' in post_data:
+            print("\nSEO Metadata being sent:")
+            # Show all yoast fields in debug mode, otherwise just show the main ones
+            if debug:
+                print("FULL SEO METADATA:")
+                for key, value in post_data['meta'].items():
+                    print(f"  {key}: {value[:50]}..." if isinstance(value, str) and len(value) > 50 else f"  {key}: {value}")
+            else:
+                # In normal mode, just show most important fields
+                for key, value in post_data['meta'].items():
+                    if key.startswith('_yoast'):
+                        if key in ['_yoast_wpseo_metadesc', '_yoast_wpseo_focuskw', '_yoast_wpseo_title']:
+                            print(f"  {key}: {value[:50]}..." if isinstance(value, str) and len(value) > 50 else f"  {key}: {value}")
+            
+            # In debug mode, also print the complete post_data structure
+            if debug:
+                print("\nDEBUG - Full post_data structure:")
+                # Safely print the post_data with sensitive data masked
+                safe_post_data = post_data.copy()
+                if 'content' in safe_post_data:
+                    safe_post_data['content'] = f"[Content length: {len(safe_post_data['content'])} chars]"
+                print(json.dumps(safe_post_data, indent=2, default=str))
+                
+                # Check if REST API is properly configured
+                print("\nDEBUG - Checking WordPress REST API configuration...")
+                try:
+                    # Test with a simpler endpoint first
+                    test_url = f"{WP_URL.rstrip('/')}/wp-json"
+                    print(f"Testing basic REST API at {test_url}")
+                    test_response = requests.get(test_url, timeout=10)
+                    print(f"REST API base response: HTTP {test_response.status_code}")
+                    
+                    # Check for existence of Yoast endpoint
+                    yoast_test_url = f"{WP_URL.rstrip('/')}/wp-json/yoast"
+                    print(f"Testing Yoast API at {yoast_test_url}")
+                    yoast_response = requests.get(yoast_test_url, timeout=10)
+                    print(f"Yoast API response: HTTP {yoast_response.status_code}")
+                    
+                    if yoast_response.status_code in [200, 201]:
+                        print("Yoast REST API appears to be available.")
+                    else:
+                        print("Yoast REST API might not be correctly configured or accessible.")
+                        print("You may need to manually set SEO metadata in WordPress.")
+                except Exception as e:
+                    print(f"Error testing REST API: {e}")
+                    print("API testing failed. This might indicate connectivity issues with your WordPress site.")
+        
         # Try posting with current configuration
         response = requests.post(posts_url, headers=headers, json=post_data)
         
+        # Check if response includes meta data in the response
         if response.status_code in [200, 201]:
             result = response.json()
-            return result['id']
+            post_id = result['id']
+            
+            print("\nResponse metadata check:")
+            if 'meta' in result:
+                print("Meta data found in response")
+                for key, value in result['meta'].items():
+                    if key.startswith('_yoast'):
+                        print(f"  {key}: {value[:50]}..." if isinstance(value, str) and len(value) > 50 else f"  {key}: {value}")
+            else:
+                print("No meta data found in response. This may be normal if the WordPress installation doesn't return meta fields.")
+            
+            # First verify if the metadata actually took
+            metadata_verified = False
+            if 'meta' in post_data and any(k.startswith('_yoast') for k in post_data['meta']):
+                print("\nVerifying if metadata was properly set...")
+                metadata_verified = wp_add_meta.verify_meta_data(WP_URL, post_id, headers, debug)
+                
+                if metadata_verified:
+                    print("Metadata verification successful! Yoast SEO metadata was properly set.")
+                else:
+                    print("Metadata verification failed. Yoast SEO metadata might not be properly set.")
+            
+            # If metadata verification failed, try alternative methods
+            if not metadata_verified and 'meta' in post_data and any(k.startswith('_yoast') for k in post_data['meta']):
+                print("\nNo Yoast SEO meta data found in response. Trying alternative methods...")
+                
+                try:
+                    # Try to update the post with metadata separately
+                    meta_content_full = {
+                        'title': title,
+                        'content': content,
+                        'meta_description': meta_content.get('meta_description', ''),
+                        'keyphrases': meta_content.get('keyphrases', [])
+                    }
+                    
+                    # Pass the post ID and meta content to wp_add_meta module for handling
+                    meta_update_success = wp_add_meta.update_post_meta(
+                        WP_URL, 
+                        post_id, 
+                        meta_content_full, 
+                        headers,
+                        debug
+                    )
+                    
+                    if meta_update_success:
+                        print("Successfully updated meta data using alternative methods.")
+                        
+                        # Verify one more time
+                        print("\nVerifying metadata after update attempt...")
+                        metadata_verified = wp_add_meta.verify_meta_data(WP_URL, post_id, headers, debug)
+                        
+                        if metadata_verified:
+                            print("Metadata verification successful after update!")
+                        else:
+                            print("Metadata verification still failed after update.")
+                            print("You may need to set the Yoast SEO metadata manually.")
+                            print(f"Edit URL: {WP_URL.rstrip('/')}/wp-admin/post.php?post={post_id}&action=edit")
+                    else:
+                        print("All automated methods to update meta data failed.")
+                        print("You will need to set the Yoast SEO metadata manually.")
+                        print(f"Edit URL: {WP_URL.rstrip('/')}/wp-admin/post.php?post={post_id}&action=edit")
+                except Exception as e:
+                    print(f"Error updating meta data: {e}")
+                    print("SEO meta data may not have been properly set. You might need to set it manually in WordPress.")
+                
+            # Return the post ID on successful post
+            return post_id
         else:
             print(f"Error posting to WordPress: HTTP {response.status_code}")
-            print(f"Response: {response.text[:500]}...")  # Show more of the error
-            
-            # If we're using categories_by_name (custom approach), try standard approach
-            if 'categories_by_name' in post_data:
-                print("Removing custom category approach and trying standard method...")
-                del post_data['categories_by_name']
-                retry_response = requests.post(posts_url, headers=headers, json=post_data)
-                if retry_response.status_code in [200, 201]:
-                    retry_result = retry_response.json()
-                    print("Successfully posted using standard method")
-                    return retry_result['id']
-            
-            # If category is causing problems, try without any category
-            if response.text.lower().find("term") >= 0 or response.text.lower().find("category") >= 0:
-                print("Category-related error detected. Attempting to post without category...")
-                
-                # Remove any category-related fields
-                if 'categories' in post_data:
-                    del post_data['categories']
-                if 'categories_by_name' in post_data:
-                    del post_data['categories_by_name']
-                
-                # Try again
-                retry_response = requests.post(posts_url, headers=headers, json=post_data)
-                if retry_response.status_code in [200, 201]:
-                    retry_result = retry_response.json()
-                    print("Successfully posted without category specification")
-                    return retry_result['id']
-                else:
-                    print(f"Still failed: HTTP {retry_response.status_code}")
-                    print(f"Response: {retry_response.text[:200]}...")
-            
-            # If authentication might be causing problems, try different auth format
-            if response.status_code in [401, 403]:
-                print("Authentication error. Trying alternative authentication...")
-                # Try using application password style (if that's what the site supports)
-                alt_auth = {
-                    'Authorization': f'Basic {base64.b64encode(f"{WP_USERNAME}:{WP_PASSWORD}".encode()).decode()}',
-                    'Content-Type': 'application/json'
-                }
-                retry_response = requests.post(posts_url, headers=alt_auth, json=post_data)
-                if retry_response.status_code in [200, 201]:
-                    retry_result = retry_response.json()
-                    print("Successfully posted with alternative authentication")
-                    return retry_result['id']
-            
-            # If all else fails, raise an error
-            raise ValueError(f"Failed to post to WordPress: HTTP {response.status_code}. Check your WordPress REST API settings.")
+            print(f"Response: {response.text[:500]}...")  # Print first 500 chars of response
+            return None
     except Exception as e:
         print(f"Error posting to WordPress: {e}")
-        raise
+        return None
 
 def main():
-    """Main function to run the script."""
-    # Print environment settings
-    if DEFAULT_CATEGORY_ID:
-        print(f"Using default category ID from .env: '{DEFAULT_CATEGORY_ID}'")
-    else:
-        print(f"Using default category name from .env: '{DEFAULT_CATEGORY_NAME}'")
-    
+    """Main entry point for the script."""
     try:
-        # Parse command line arguments - this will automatically exit if --help is used
+        # Parse command line arguments
         args = setup_argparse()
         
-        # Exit early if version flag is set
+        # Handle version display
         if args.version:
-            print(f"wp_ai_poster.py version {VERSION}")
-            return
+            print(f"WordPress AI Blog Post Generator v{VERSION}")
+            sys.exit(0)
         
-        # Get the number of loops to run
-        loop_count = max(1, args.loop)
+        # Initialize OpenAI client
+        client = connect_to_openai()
         
-        for current_loop in range(1, loop_count + 1):
-            if loop_count > 1:
-                print(f"\n{'='*50}")
-                print(f"STARTING LOOP {current_loop} OF {loop_count}")
-                print(f"{'='*50}\n")
+        # Loop for multiple post generations
+        for i in range(args.loop):
+            if args.loop > 1:
+                print(f"\n=== Running iteration {i+1} of {args.loop} ===\n")
             
-            # Use default tags if none provided
-            if not args.tags:
-                args.tags = DEFAULT_TAGS
-            
-            # If no topic provided and not loading from file, get a random topic
-            current_topic = args.topic
-            if not current_topic and not args.load_file:
-                print("No topic provided. Generating a random topic...")
-                topic_data = get_random_topic()
-                current_topic = topic_data['title']
-                
-                # If we have a description, display it
-                if topic_data.get('description'):
-                    print(f"Topic description: {topic_data['description']}")
-                
-                # If we have source information, display it
-                if 'source_article' in topic_data:
-                    source_article = topic_data['source_article']
-                    print(f"Based on: {source_article['title']}")
-                    print(f"Source: {source_article['source']} - {source_article['url']}")
-                
-                print(f"Generated topic: {current_topic}")
-            
-            # Check if we have a topic now (either provided or random)
-            if not current_topic and not args.load_file:
-                print("Error: Could not generate a topic. Please specify using --topic.")
-                if current_loop < loop_count:
-                    print("Skipping to next iteration...")
-                    continue
-                else:
-                    sys.exit(1)
-            
-            # Initialize OpenAI client
-            try:
-                client = connect_to_openai()
-            except Exception as e:
-                print(f"Error connecting to OpenAI: {e}")
-                if current_loop < loop_count:
-                    print("Skipping to next iteration...")
-                    continue
-                else:
-                    sys.exit(1)
-            
-            # Create a copy of args with the current topic
-            current_args = copy.deepcopy(args)
-            current_args.topic = current_topic
-            
-            # Load existing content or generate new content
+            # Load existing content or generate new
             if args.load_file:
-                try:
-                    with open(args.load_file, 'r', encoding='utf-8') as file:
-                        content = file.read()
+                # Load content from file
+                print(f"Loading content from file: {args.load_file}")
+                with open(args.load_file, 'r', encoding='utf-8') as file:
+                    content = file.read()
+                    # Check if content might already be a tuple format from previous run
+                    if isinstance(content, tuple) and len(content) == 2:
+                        content, title = content
+                    else:
                         title = extract_title(content)
-                        print(f"Loaded content from {args.load_file}")
-                        print(f"Extracted title: {title}")
-                except Exception as e:
-                    print(f"Error loading file: {e}")
-                    if current_loop < loop_count:
-                        print("Skipping to next iteration...")
-                        continue
-                    else:
-                        sys.exit(1)
             else:
-                try:
-                    # Set random post length if not specified
-                    if current_args.length is None:
-                        current_args.length = get_random_post_length()
-                        print(f"Using random post length: {current_args.length} words")
-                    
-                    print("Generating blog post...")
-                    print(f"Topic: {current_args.topic}")
-                    print(f"Length: {current_args.length} words")
-                    print("Tone: Persuasive")
-                    print("Structure: Clear")
-                    
-                    # Step 1: Generate outline
-                    print("\nStep 1: Generating blog post outline...")
-                    try:
-                        outline = generate_outline(client, current_args)
-                        print("Outline generated successfully.")
-                    except Exception as e:
-                        print(f"Error generating outline: {e}")
-                        traceback.print_exc()
-                        if current_loop < loop_count:
-                            print("Skipping to next iteration...")
-                            continue
-                        else:
-                            sys.exit(1)
-                    
-                    # Step 2: Generate each section based on the outline
-                    print("\nStep 2: Generating individual sections...")
-                    try:
-                        content, title = generate_blog_post_sections(client, current_args, outline)
-                        print("Blog post sections generated successfully.")
-                        print(f"\nGenerated title: {title}")
-                    except Exception as e:
-                        print(f"Error generating blog post sections: {e}")
-                        traceback.print_exc()
-                        if current_loop < loop_count:
-                            print("Skipping to next iteration...")
-                            continue
-                        else:
-                            sys.exit(1)
-                    
-                    # Save to file if requested
-                    if current_args.output_file:
-                        try:
-                            # If we're in a loop, append the loop number to the filename
-                            if loop_count > 1:
-                                filename_parts = os.path.splitext(current_args.output_file)
-                                output_file = f"{filename_parts[0]}_{current_loop}{filename_parts[1]}"
-                            else:
-                                output_file = current_args.output_file
-                                
-                            save_to_file(content, output_file)
-                            print(f"Content saved to {output_file}")
-                        except Exception as e:
-                            print(f"Error saving to file: {e}")
-                except Exception as e:
-                    print(f"Error generating content: {e}")
-                    traceback.print_exc()
-                    if current_loop < loop_count:
-                        print("Skipping to next iteration...")
-                        continue
-                    else:
-                        sys.exit(1)
+                # Generate outline
+                outline = generate_outline(client, args)
+                
+                # Generate content based on outline
+                content, title = generate_blog_post_sections(client, args, outline)
+            
+            # Save to file if requested
+            if args.output_file:
+                save_to_file(content, args.output_file)
             
             # Generate meta content if not skipped
-            if not current_args.skip_meta:
-                try:
-                    meta_content = generate_meta_content(client, title, content, current_args.keyphrases)
-                except Exception as e:
-                    print(f"Error generating meta content: {e}")
-                    meta_content = None
-            else:
-                meta_content = None
+            meta_content = None
+            if not args.skip_meta:
+                meta_content = generate_meta_content(client, title, content, args.keyphrases)
             
             # Post to WordPress if not skipped
-            if not current_args.skip_post:
-                try:
-                    # Prioritize command line category ID over name
-                    category_id = current_args.category_id
-                    
-                    # If no command line category ID, use the DEFAULT_CATEGORY_ID from .env
-                    if category_id is None and DEFAULT_CATEGORY_ID:
-                        try:
-                            category_id = int(DEFAULT_CATEGORY_ID)
-                            print(f"Using default category ID from .env: {category_id}")
-                        except (ValueError, TypeError):
-                            print(f"Warning: Invalid DEFAULT_CATEGORY_ID in .env: '{DEFAULT_CATEGORY_ID}'")
-                            category_id = None
-                    
-                    # Only use category name if no category ID is specified
-                    if category_id is None:
-                        category_name = current_args.category_name if current_args.category_name else DEFAULT_CATEGORY_NAME
-                    else:
-                        category_name = None  # Don't need name if we have ID
-                    
-                    # Handle tags
-                    tags = current_args.tags if current_args.tags else DEFAULT_TAGS
-                    
-                    # Set status
-                    status = current_args.status if current_args.status else DEFAULT_STATUS
-                    
-                    # Post to WordPress
-                    post_to_wordpress(
-                        title, 
-                        content, 
-                        category_name=category_name,
-                        category_id=category_id,
-                        tags=tags, 
-                        status=status,
-                        meta_content=meta_content,
-                        auth_method=current_args.auth_method,
-                        use_application_password=current_args.use_application_password
-                    )
-                except Exception as e:
-                    print(f"Error posting to WordPress: {e}")
-                    if current_loop < loop_count:
-                        print("Skipping to next iteration...")
-                        continue
-                    else:
-                        sys.exit(1)
-            
-            if loop_count > 1 and current_loop < loop_count:
-                print(f"\nCompleted loop {current_loop} of {loop_count}. Waiting 5 seconds before next iteration...")
-                time.sleep(5)
+            if not args.skip_post:
+                post_id = post_to_wordpress(
+                    title, 
+                    content, 
+                    category_name=args.category_name,
+                    category_id=args.category_id,
+                    tags=args.tags.split(',') if args.tags else DEFAULT_TAGS,
+                    status=args.status,
+                    meta_content=meta_content,
+                    auth_method=args.auth_method,
+                    use_application_password=args.use_application_password,
+                    debug=args.debug
+                )
                 
-    except SystemExit:
-        # This catches the system exit from argparse's help action
-        pass
+                if post_id:
+                    print(f"\nSuccessfully posted to WordPress with ID: {post_id}")
+                    print(f"Edit URL: {WP_URL.rstrip('/')}/wp-admin/post.php?post={post_id}&action=edit")
+                else:
+                    print("\nFailed to post to WordPress. Content was generated but not posted.")
+            
+            # Wait between iterations if running multiple
+            if args.loop > 1 and i < args.loop - 1:
+                delay = random.randint(5, 15)
+                print(f"\nWaiting {delay} seconds before next iteration...")
+                time.sleep(delay)
+                
+    except KeyboardInterrupt:
+        print("\nOperation cancelled by user.")
+        sys.exit(1)
     except Exception as e:
-        print(f"Unexpected error: {e}")
+        print(f"\nError: {e}")
+        print(traceback.format_exc())
         sys.exit(1)
 
 if __name__ == "__main__":

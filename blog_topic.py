@@ -87,20 +87,12 @@ def generate_search_query(openai_client, guidelines):
                     randomized_guidelines = '.'.join(selected_sentences) + '.'
                 else:
                     randomized_guidelines = guidelines
-                    
-            # Randomly focus on specific themes
-            themes = ["open source", "memecoins", "cryptocurrency", "pro-liberty activism"]
-            focused_themes = random.sample(themes, random.randint(1, len(themes)))
-            
-            print(f"Using randomized guidelines with focus on: {', '.join(focused_themes)}")
         else:
             randomized_guidelines = guidelines
-            focused_themes = ["open source", "memecoins", "cryptocurrency", "pro-liberty activism"]
         
         prompt = f"""
         Based on the following guidelines for blog topics, generate a specific news search query 
-        that will find current and relevant articles. The query should be focused on one of these
-        themes: {', '.join(focused_themes)}.
+        that will find current and relevant articles.
         
         Today's date is {current_date}. IMPORTANT: Please generate a query that will find recent and timely news.
         Do NOT include a date in the query.
