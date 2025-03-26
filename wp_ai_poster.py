@@ -254,6 +254,9 @@ def create_blog_prompt(args):
     """Create a detailed prompt for the AI to generate an outline based on user arguments, context, and style."""
     # Get current date for context
     current_date = datetime.now().strftime("%B %d, %Y")
+
+    topic_title = args.topic["title"]
+    topic_description = args.topic["description"]
     
     # Read content from markdown files
     context_style_content = read_markdown_file(CONTEXT_STYLE_FILE)
@@ -294,8 +297,12 @@ def create_blog_prompt(args):
     [STYLE]
     {context_style_content}
 
+    [TOPIC]
+    Title: {topic_title}
+    Description: {topic_description}
+
     [INSTRUCTIONS]
-    Create a detailed outline for a blog post about {args.topic}.
+    Create a detailed outline for a blog post about [TOPIC] {topic_title}.
     Only write the outline, no other text - do not inlude lines like --- or markdown.
 
     On the first line, write the title of the blog post.
@@ -445,7 +452,7 @@ def generate_outline(client, args):
         traceback.print_exc()
         
         # Return a basic outline structure as fallback
-        fallback_outline = f"{args.topic}\n\n## Introduction\nIntroduction to the topic\n\n## Main Point 1\nFirst main point about the topic\n\n## Main Point 2\nSecond main point about the topic\n\n## Conclusion\nConclusion and summary"
+        fallback_outline = f"## Introduction\nIntroduction to the topic\n\n## Main Point 1\nFirst main point about the topic\n\n## Main Point 2\nSecond main point about the topic\n\n## Conclusion\nConclusion and summary"
         print("\n=== Fallback Outline (due to error) ===")
         print(fallback_outline)
         print("========================\n")
@@ -514,7 +521,7 @@ def generate_blog_post_sections(client, args, outline):
         
         if not title:
             print("Warning: No title found in the outline. Using topic as title.")
-            title = args.topic
+            title = args.topic["title"]
             
         if not sections:
             print("Warning: No sections found in the outline. Creating a default structure.")
@@ -1008,9 +1015,10 @@ def post_to_wordpress(title, content, category_name=None, category_id=None, tags
         post_data['tags'] = tag_ids
     
     # Add meta description and keyphrases if available
-    if meta_content:
+    # if meta_content:
         # Use the wp_add_meta module to add metadata
-        post_data = wp_add_meta.add_meta_to_post_data(post_data, title, content, meta_content)
+        # DISABLE, its broken for unknown reason
+        # post_data = wp_add_meta.add_meta_to_post_data(post_data, title, content, meta_content)
     
     # Send the request
     try:
@@ -1152,37 +1160,22 @@ def main():
     try:
         # Parse command line arguments
         args = setup_argparse()
-        
-        # Handle version display
-        if args.version:
-            print(f"WordPress AI Blog Post Generator v{VERSION}")
-            sys.exit(0)
-        
+
+
         # Initialize OpenAI client
         client = connect_to_openai()
         
         # Loop for multiple post generations
         for i in range(args.loop):
-            if args.loop > 1:
-                print(f"\n=== Running iteration {i+1} of {args.loop} ===\n")
-            
-            # Load existing content or generate new
-            if args.load_file:
-                # Load content from file
-                print(f"Loading content from file: {args.load_file}")
-                with open(args.load_file, 'r', encoding='utf-8') as file:
-                    content = file.read()
-                    # Check if content might already be a tuple format from previous run
-                    if isinstance(content, tuple) and len(content) == 2:
-                        content, title = content
-                    else:
-                        title = extract_title(content)
-            else:
-                # Generate outline
-                outline = generate_outline(client, args)
+            topic = get_random_topic()
+
+            args.topic = topic
+
+            # Generate outline
+            outline = generate_outline(client, args)
                 
-                # Generate content based on outline
-                content, title = generate_blog_post_sections(client, args, outline)
+            # Generate content based on outline
+            content, title = generate_blog_post_sections(client, args, outline)
             
             # Save to file if requested
             if args.output_file:
@@ -1190,8 +1183,9 @@ def main():
             
             # Generate meta content if not skipped
             meta_content = None
-            if not args.skip_meta:
-                meta_content = generate_meta_content(client, title, content, args.keyphrases)
+            # Disable meta generation as its broken for unknown reason
+            # if not args.skip_meta:
+            #     meta_content = generate_meta_content(client, title, content, args.keyphrases)
             
             # Post to WordPress if not skipped
             if not args.skip_post:
@@ -1202,7 +1196,7 @@ def main():
                     category_id=args.category_id,
                     tags=args.tags.split(',') if args.tags else DEFAULT_TAGS,
                     status=args.status,
-                    meta_content=meta_content,
+                    # meta_content=meta_content,
                     auth_method=args.auth_method,
                     use_application_password=args.use_application_password,
                     debug=args.debug

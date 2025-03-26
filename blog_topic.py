@@ -281,16 +281,20 @@ def generate_blog_topic(openai_client, article, guidelines):
 
         [INSTRUCTIONS]
         Today's date is {current_date}. Connect [TOPIC] to [GOALS] and [KNOWLEDGE] using [STYLE].
-        Generate a specific blog title related to [TOPIC] that would accomplish [GOALS] and align with [KNOWLEDGE] using [STYLE].
+        Generate a specific blog title related to the article {article['title']} that would accomplish [GOALS] and align with [KNOWLEDGE] using [STYLE].
         Include a brief (2-3 sentence) description of what the article should cover. Make it engaging and aligned with [GOALS].
-        Do not include the current year or date in the title. Keep the title short and concise.
+        Do not include the current year or date in the title. Keep the blog post title short and concise.
+        Focus on the [TOPIC] {article['title']} and persuasively align it with [GOALS] and [KNOWLEDGE] using [STYLE].
         Optimize the title for SEO by being very short and concise using common search phrases.
         
         Format your response as:
         TITLE: [Your title here]
         DESCRIPTION: [Your brief description here]
         """
-        
+        print("--------------------------------")
+        print(prompt)
+        print("--------------------------------")
+
         response = openai_client.chat.completions.create(
             model=OPENAI_MODEL,
             messages=[
@@ -299,7 +303,7 @@ def generate_blog_topic(openai_client, article, guidelines):
             ],
             temperature=0.8,
         )
-        
+
         topic_response = response.choices[0].message.content.strip()
         
         # Extract title and description
@@ -307,6 +311,11 @@ def generate_blog_topic(openai_client, article, guidelines):
         description = ""
         if "DESCRIPTION:" in topic_response:
             description = topic_response.split("DESCRIPTION:", 1)[-1].strip()
+
+        print("--------------------------------")
+        print(title_match)
+        print(description)
+        print("--------------------------------")
         
         return {
             'title': title_match,

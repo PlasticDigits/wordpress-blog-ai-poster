@@ -1,5 +1,3 @@
-### **CL8Y: Viral Hyperstition, Financial Insurrection**
-
 #### **Core Principles**
 
 - **Total Supply:** **3,000,000 CL8Y**—50% to **liquidity**, 50% to **Ceramic’s wallet**, with **deflationary burn mechanics**.
@@ -59,5 +57,3 @@
 - **CL8Y Whitepaper:** [Read Here](https://ceramicliberty.com/cl8y-whitepaper/)
 - **Ceramic’s Wallets:** [View Here](https://ceramicliberty.com/ceramics-wallet-list/)
 - **Contract Source Code:** [Verify on BSCscan](https://bscscan.com/address/0x999311589cc1Ed0065AD9eD9702cB593FFc62ddF)
-
-### **🚀 CL8Y IS FINANCIAL INSURRECTION. BUY, HODL, AND SPREAD THE VIRUS.**
